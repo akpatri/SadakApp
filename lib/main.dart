@@ -3,25 +3,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'core/di/app_provider.dart';
-import 'service/fake_auth_service.dart';
 import 'core/navigation/app_routes.dart';
+import 'service/fake_auth_service.dart';
+import 'service/fake_location_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // 🔥 Initialize Firebase only once
   await Firebase.initializeApp();
 
-  const bool useFakeAuth = true;
+  const useFakeAuth = true;
+  const useFakeLocation = true;
 
   runApp(
     ProviderScope(
-      overrides: useFakeAuth
-          ? [
-              authServiceProvider
-                  .overrideWithValue(FakeAuthService()),
-            ]
-          : const [],
+      overrides: [
+        if (useFakeAuth)
+          authServiceProvider
+              .overrideWithValue(FakeAuthService()),
+        if (useFakeLocation)
+          locationServiceProvider
+              .overrideWithValue(FakeLocationService()),
+      ],
       child: const SadakApp(),
     ),
   );
