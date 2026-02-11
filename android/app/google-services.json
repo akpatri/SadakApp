@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "688748571808",
+    "project_id": "sadak-ede10",
+    "storage_bucket": "sadak-ede10.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:688748571808:android:addef110f1bcacb4536dc5",
+        "android_client_info": {
+          "package_name": "com.example.sadak"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyArYWk11p671v9hUCHHI4XdM0nUGbfIRFc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
