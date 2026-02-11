@@ -1,42 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
+import 'package:lottie/lottie.dart';
 
-class SplashView extends ConsumerStatefulWidget {
+import '../../view_model/splash_view_model.dart';
+
+class SplashView extends ConsumerWidget {
   const SplashView({super.key});
 
   @override
-  ConsumerState<SplashView> createState() => _SplashViewState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
 
-class _SplashViewState extends ConsumerState<SplashView> {
-  @override
-  void initState() {
-    super.initState();
-    _checkAuth();
-  }
+    ref.listen<SplashState>(splashVMProvider, (previous, next) {
+      if (next.ready) {
+        context.go('/login');
+      }
+    });
 
-  Future<void> _checkAuth() async {
-    // Small delay to allow Firebase initialization
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (!mounted) return;
-
-    if (user != null) {
-      context.go('/home');
-    } else {
-      context.go('/login');
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       body: Center(
-        child: CircularProgressIndicator(),
+        child: Lottie.asset(
+          "assets/animations/cycleroute.json",
+          repeat: true,
+        ),
       ),
     );
   }
