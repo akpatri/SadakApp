@@ -2,17 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 
-import 'core/di/app_provider.dart';
-import 'core/navigation/app_routes.dart';
-import 'service/fake_auth_service.dart';
-import 'service/fake_location_service.dart';
+import 'external/di/app_provider.dart';
+import 'external/navigation/app_routes.dart';
+import 'core/auth/service/fake_auth_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
 
   const useFakeAuth = true;
-  const useFakeLocation = true;
+  const useFakeLocation = false;
 
   runApp(
     ProviderScope(
@@ -20,9 +19,9 @@ Future<void> main() async {
         if (useFakeAuth)
           authServiceProvider
               .overrideWithValue(FakeAuthService()),
-        if (useFakeLocation)
-          locationServiceProvider
-              .overrideWithValue(FakeLocationService()),
+        // if (useFakeLocation)
+        //   locationServiceProvider
+        //       .overrideWithValue(FakeLocationService()),
       ],
       child: const SadakApp(),
     ),
