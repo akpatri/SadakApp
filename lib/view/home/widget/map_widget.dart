@@ -4,192 +4,212 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:open_route_service/open_route_service.dart';
 import 'package:sadak/core/di.dart';
-import 'package:flutter/widget_previews.dart';
+import 'package:sadak/model/geo_json_property_model.dart';
 
-class MapView extends ConsumerStatefulWidget {
-  final ORSCoordinate startCoordinate;
-  final ORSCoordinate endCoordinate;
-  final GeoJsonFeatureCollection geoJson;
-  final ORSProfile? profileOverride;
-
-  const MapView({
-    super.key,
-    required this.startCoordinate,
-    required this.endCoordinate,
-    required this.geoJson,
-    this.profileOverride,
-  });
+class MapViewWidgetWidget extends ConsumerStatefulWidget {
+  const MapViewWidgetWidget({super.key});
 
   @override
-  ConsumerState<MapView> createState() => _MapViewState();
+  ConsumerState<MapViewWidgetWidget> createState() =>
+      _MapViewWidgetWidgetState();
 }
 
-class _MapViewState extends ConsumerState<MapView> {
+class _MapViewWidgetWidgetState extends ConsumerState<MapViewWidgetWidget> {
   final MapController _controller = MapController();
-
-  bool _mapReady = false;
-  bool _cameraFitted = false;
-
+  late final ProviderSubscription<AsyncValue<GeoJsonFeatureCollection>> _sub;
   @override
   void initState() {
     super.initState();
 
-    Future.microtask(() {
-      ref.read(mapViewModelProvider.notifier).initialize(
-        startCoordinate: widget.startCoordinate,
-        endCoordinate: widget.endCoordinate,
-        collection: widget.geoJson,
-      );
-    });
+    _sub = ref.listenManual<AsyncValue<GeoJsonFeatureCollection>>(
+      geoJsonCollectionProvider,
+      (_, next) {
+        next.whenData(_fitCamera);
+      },
+    );
   }
 
-  void _tryFitCamera() {
-    if (!_mapReady || _cameraFitted) return;
+  @override
+  void dispose() {
+    _sub.close();
+    super.dispose();
+  }
 
-    final bounds = ref.read(mapViewModelProvider.notifier).bounds;
+  void _fitCamera(GeoJsonFeatureCollection collection) {
+    final bounds = _calculateBounds(collection);
     if (bounds == null) return;
-
-    _cameraFitted = true;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
       _controller.fitCamera(
-        CameraFit.bounds(
-          bounds: bounds,
-          padding: const EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 40,
-            bottom: 40,
-          ),
-        ),
+        CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(40)),
       );
     });
   }
 
+  LatLngBounds? _calculateBounds(GeoJsonFeatureCollection collection) {
+    final points = <LatLng>[];
+
+    for (final feature in collection.features) {
+      for (final ring in feature.geometry.coordinates) {
+        for (final c in ring) {
+          points.add(LatLng(c.latitude, c.longitude));
+        }
+      }
+    }
+
+    if (points.isEmpty) return null;
+    return LatLngBounds.fromPoints(points);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(mapViewModelProvider);
-    final vm = ref.watch(mapViewModelProvider.notifier);
+    final asyncCollection = ref.watch(geoJsonCollectionProvider);
 
-    // Listen only once per rebuild safely
-    ref.listen(mapViewModelProvider, (previous, next) {
-      next.whenData((_) => _tryFitCamera());
-    });
+    return asyncCollection.when(
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (err, _) => Scaffold(body: Center(child: Text("Error: $err"))),
+      data: _buildMap,
+    );
+  }
+
+  Widget _buildMap(GeoJsonFeatureCollection collection) {
+    final layers = _buildLayers(collection);
 
     return Scaffold(
-      body: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text(e.toString())),
-        data: (_) {
-          return FlutterMap(
-            mapController: _controller,
-            options: MapOptions(
-              initialCenter: LatLng(
-                widget.startCoordinate.latitude,
-                widget.startCoordinate.longitude,
-              ),
-              initialZoom: 14,
-
-              // Fully static map (no drag, no zoom)
-              interactionOptions: const InteractionOptions(
-                flags: 0,
-              ),
-
-              onMapReady: () {
-                _mapReady = true;
-                _tryFitCamera();
-              },
-            ),
-            children: [
-              _buildTileLayer(),
-              PolygonLayer(polygons: vm.polygons),
-              PolylineLayer(polylines: vm.polylines),
-              MarkerLayer(markers: vm.markers),
-            ],
-          );
-        },
+      body: FlutterMap(
+        mapController: _controller,
+        options: const MapOptions(
+          initialCenter: LatLng(20.5937, 78.9629), // India fallback
+          initialZoom: 5,
+        ),
+        children: [
+          TileLayer(
+            urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            userAgentPackageName: 'com.example.app',
+          ),
+          ...layers,
+        ],
       ),
     );
   }
 
-  Widget _buildTileLayer() {
-    return TileLayer(
-      urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-      userAgentPackageName: 'com.example.app',
+  List<Widget> _buildLayers(GeoJsonFeatureCollection collection) {
+    final markers = <Marker>[];
+    final polylines = <Polyline>[];
+    final polygons = <Polygon>[];
+
+    for (final feature in collection.features) {
+      final property = GeoJsonProperty.fromDynamic(feature.properties);
+
+      if (property == null) continue;
+
+      if (!property.isVisible) continue;
+
+      switch (feature.geometry.type) {
+        case "Point":
+          markers.add(_buildMarker(feature, property));
+          break;
+
+        case "LineString":
+          polylines.add(_buildPolyline(feature, property));
+          break;
+
+        case "Polygon":
+          polygons.add(_buildPolygon(feature));
+          break;
+      }
+    }
+
+    return [
+      if (polygons.isNotEmpty) PolygonLayer(polygons: polygons),
+      if (polylines.isNotEmpty) PolylineLayer(polylines: polylines),
+      if (markers.isNotEmpty) MarkerLayer(markers: markers),
+    ];
+  }
+
+  Marker _buildMarker(GeoJsonFeature feature, GeoJsonProperty property) {
+    final coord = feature.geometry.coordinates.first.first;
+
+    final iconData = _resolveMarkerIcon(property);
+    final color = _resolveMarkerColor(property);
+
+    return Marker(
+      point: LatLng(coord.latitude, coord.longitude),
+      width: 40,
+      height: 40,
+      child: Icon(iconData, color: color),
     );
   }
-}
 
+  IconData _resolveMarkerIcon(GeoJsonProperty property) {
+    switch (property.type) {
+      case "source":
+        return Icons.trip_origin;
+      case "destination":
+        return Icons.flag;
+      case "user_location":
+        return Icons.my_location;
+      default:
+        return Icons.location_on;
+    }
+  }
 
-@Preview(name: "MapView - Mock Preview")
-Widget mapViewPreview() {
-  const start = ORSCoordinate(latitude: 20.2961, longitude: 85.8245);
-  const end = ORSCoordinate(latitude: 20.3000, longitude: 85.8200);
+  Color _resolveMarkerColor(GeoJsonProperty property) {
+    switch (property.type) {
+      case "source":
+        return Colors.green;
+      case "destination":
+        return Colors.red;
+      case "user_location":
+        return Colors.blue;
+      default:
+        return Colors.grey;
+    }
+  }
 
-  const markerFeature = GeoJsonFeature(
-    type: "Feature",
-    properties: {"name": "POI Marker", "type": "poi"},
-    geometry: GeoJsonFeatureGeometry(
-      type: "Point",
-      internalType: GsonFeatureGeometryCoordinatesType.single,
-      coordinates: [
-        [ORSCoordinate(latitude: 20.2975, longitude: 85.8220)],
-      ],
-    ),
-  );
+  Polyline _buildPolyline(GeoJsonFeature feature, GeoJsonProperty property) {
+    final points = feature.geometry.coordinates.first
+        .map((c) => LatLng(c.latitude, c.longitude))
+        .toList();
 
-  const polylineFeature = GeoJsonFeature(
-    type: "Feature",
-    properties: {"name": "Mock Route", "type": "route"},
-    geometry: GeoJsonFeatureGeometry(
-      type: "LineString",
-      internalType: GsonFeatureGeometryCoordinatesType.list,
-      coordinates: [
-        [
-          ORSCoordinate(latitude: 20.2961, longitude: 85.8245),
-          ORSCoordinate(latitude: 20.2970, longitude: 85.8230),
-          ORSCoordinate(latitude: 20.2980, longitude: 85.8220),
-          ORSCoordinate(latitude: 20.2990, longitude: 85.8210),
-          ORSCoordinate(latitude: 20.3000, longitude: 85.8200),
-        ],
-      ],
-    ),
-  );
+    final color = _resolveRouteColor(property);
 
-  const polygonFeature = GeoJsonFeature(
-    type: "Feature",
-    properties: {"name": "Mock Zone", "type": "zone"},
-    geometry: GeoJsonFeatureGeometry(
-      type: "Polygon",
-      internalType: GsonFeatureGeometryCoordinatesType.listList,
-      coordinates: [
-        [
-          ORSCoordinate(latitude: 20.2955, longitude: 85.8250),
-          ORSCoordinate(latitude: 20.2955, longitude: 85.8210),
-          ORSCoordinate(latitude: 20.2985, longitude: 85.8210),
-          ORSCoordinate(latitude: 20.2985, longitude: 85.8250),
-          ORSCoordinate(latitude: 20.2955, longitude: 85.8250),
-        ],
-      ],
-    ),
-  );
+    return Polyline(
+      points: points,
+      strokeWidth: property.isSelected ? 6 : 4,
+      color: color,
+    );
+  }
 
-  const collection = GeoJsonFeatureCollection(
-    bbox: [],
-    features: [markerFeature, polylineFeature, polygonFeature],
-  );
+  Color _resolveRouteColor(GeoJsonProperty property) {
+    if (property.isGptRoute) {
+      return Colors.blue;
+    }
 
-  return ProviderScope(
-    child: MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
-      home: MapView(
-        startCoordinate: start,
-        endCoordinate: end,
-        geoJson: collection,
-      ),
-    ),
-  );
+    if (property.isCommunityRoute) {
+      return Colors.green;
+    }
+
+    if (property.isOfficialRoute) {
+      return Colors.grey;
+    }
+
+    return Colors.black;
+  }
+
+  Polygon _buildPolygon(GeoJsonFeature feature) {
+    final points = feature.geometry.coordinates.first
+        .map((c) => LatLng(c.latitude, c.longitude))
+        .toList();
+
+    return Polygon(
+      points: points,
+      color: Colors.purple.withOpacity(0.2),
+      borderStrokeWidth: 2,
+      borderColor: Colors.purple,
+    );
+  }
 }

@@ -1,4 +1,6 @@
+import 'package:flutter/material.dart';
 
+@immutable
 class LocationSuggestion {
   final String label;
   final double? lat;

@@ -1,17 +1,16 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open_route_service/open_route_service.dart';
 import 'package:sadak/core/di.dart';
-import 'package:sadak/model/view/location_suggestion_model.dart';
-import 'package:flutter/widget_previews.dart';
-import 'package:sadak/view/home/widget/overlay_suggestion_list.dart';
-
+import 'package:sadak/model/geo_json_property_model.dart';
+import 'package:sadak/model/map/location_suggesstion_model.dart';
+import 'package:sadak/view/home/widget/overlay_suggesstion_list.dart';
 
 enum LocationFieldType { source, destination }
 
 class LocationAutocompleteField extends ConsumerStatefulWidget {
   final LocationFieldType type;
-  final Function(String, double?, double?)? onSelected;
+  final void Function(String, double?, double?)? onSelected;
 
   const LocationAutocompleteField({
     super.key,
@@ -40,23 +39,40 @@ class _LocationAutocompleteFieldState
   }
 
   Future<void> _loadCurrentLocation() async {
-    final locationService = ref.read(locationServiceProvider);
-
-    final current = await locationService.getCurrentPosition();
-
-    final label =
-        current.features.first.properties['label'] ?? "Current Location";
-
-    final coord = current.features.first.geometry.coordinates.first.first;
-
-    _controller.text = label;
-
-    widget.onSelected?.call(label, coord.latitude, coord.longitude);
+    await ref
+        .read(geoJsonCollectionProvider.notifier)
+        .setCurrentLocationAsSource();
   }
 
   @override
   Widget build(BuildContext context) {
+    /// Listen for geoJson updates
+    ref.listen<AsyncValue<GeoJsonFeatureCollection>>(
+      geoJsonCollectionProvider,
+      (previous, next) {
+        next.whenData((collection) {
+          for (final feature in collection.features) {
+            final property = GeoJsonProperty.fromDynamic(feature.properties);
+
+            if (property == null) continue;
+
+            if (property.type == widget.type.name) {
+              final label = property.label;
+
+              if (label != null && _controller.text != label) {
+                _controller.text = label;
+              }
+            }
+          }
+        });
+      },
+    );
+
     final asyncSuggestions = ref.watch(locationAutocompleteProvider);
+
+    final notifier = ref.read(locationAutocompleteProvider.notifier);
+
+    final isActiveField = notifier.activeSearchFieldType == widget.type;
 
     return RawAutocomplete<LocationSuggestion>(
       textEditingController: _controller,
@@ -75,38 +91,56 @@ class _LocationAutocompleteFieldState
       },
 
       onSelected: (selection) {
+        final notifier = ref.read(locationAutocompleteProvider.notifier);
+
+        if (selection.lat != null && selection.lng != null) {
+          notifier.setLocation(
+            type: widget.type,
+            label: selection.label,
+            lat: selection.lat!,
+            lng: selection.lng!,
+          );
+        }
+
         widget.onSelected?.call(selection.label, selection.lat, selection.lng);
       },
 
-      fieldViewBuilder: (context, textEditingController, focusNode, onSubmit) {
+      fieldViewBuilder: (_, controller, focusNode, __) {
         return TextField(
-          controller: textEditingController,
+          controller: controller,
           focusNode: focusNode,
           onChanged: (value) {
-            ref.read(locationAutocompleteProvider.notifier).search(value);
+            notifier.search(value, fieldType: widget.type);
           },
           decoration: InputDecoration(
             hintText: "Enter location",
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-            prefixIcon: const Icon(Icons.location_on),
+            prefixIcon: Icon(
+              Icons.location_on,
+              color: widget.type == LocationFieldType.source
+                  ? Colors.green
+                  : Colors.red,
+            ),
             suffixIcon: asyncSuggestions.when(
-              loading: () => const Padding(
-                padding: EdgeInsets.all(12),
-                child: SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-              data: (_) => textEditingController.text.isNotEmpty
+              loading: () => isActiveField
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+              data: (_) => controller.text.isNotEmpty
                   ? IconButton(
                       icon: const Icon(Icons.close),
                       onPressed: () {
-                        textEditingController.clear();
-                        ref.read(locationAutocompleteProvider.notifier).clear();
+                        controller.clear();
+                        notifier.clear();
                       },
                     )
-                  : null,
+                  : const SizedBox.shrink(),
               error: (_, __) => const Icon(Icons.error_outline),
             ),
           ),
@@ -120,27 +154,16 @@ class _LocationAutocompleteFieldState
           return const SizedBox.shrink();
         }
 
-        final parentTheme = Theme.of(context);
-
-        return Theme(
-          data: parentTheme.copyWith(
-            brightness: Brightness.light, // 👈 FORCE LIGHT MODE
-          ),
-          child: Align(
-            alignment: Alignment.topLeft,
-            child: Material(
-              color: Colors.white, // 👈 FORCE WHITE BACKGROUND
-              elevation: 0,
-              child: SizedBox(
-                width: MediaQuery.of(context).size.width - 48,
-                child: OverlaySuggestionList(
-                  suggestions: suggestions,
-                  query: _controller.text,
-                  highlightedIndex: -1,
-                  onSelected: (item) {
-                    onSelected(item);
-                  },
-                ),
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(12),
+            child: SizedBox(
+              width: MediaQuery.of(context).size.width - 48,
+              child: OverlaySuggestionList(
+                suggestions: suggestions,
+                onSelected: onSelected,
               ),
             ),
           ),
@@ -155,50 +178,4 @@ class _LocationAutocompleteFieldState
     _focusNode.dispose();
     super.dispose();
   }
-}
-
-@Preview(name: 'Location Autocomplete - Light')
-Widget locationAutocompleteLightPreview() {
-  return ProviderScope(
-    child: MaterialApp(
-      debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.light,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
-      home: Scaffold(
-        body: const SafeArea(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: LocationAutocompleteField(
-              type: LocationFieldType.destination,
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-@Preview(name: 'Location Autocomplete - Dark')
-Widget locationAutocompleteDarkPreview() {
-  return ProviderScope(
-    child: MaterialApp(
-      debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.dark,
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorSchemeSeed: Colors.deepPurple,
-      ),
-      home: Scaffold(
-        body: const SafeArea(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: LocationAutocompleteField(
-              type: LocationFieldType.destination,
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
 }
